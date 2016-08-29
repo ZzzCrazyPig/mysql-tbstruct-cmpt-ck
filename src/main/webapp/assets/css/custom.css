@@ -1,0 +1,11 @@
+#main-panel {
+	margin-top: 10px;
+	margin-bottom: 10px;
+	padding: 15px;
+	background-color: #fff;
+	min-height: 600px;
+}
+
+.text-focus {
+	color: 	#FF3333;
+}
