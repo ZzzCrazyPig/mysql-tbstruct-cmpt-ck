@@ -19,6 +19,7 @@ public class CmptCheckResult implements Serializable {
 	private ConnInfo gvConnInfo;
 	
 	private boolean compatible = true; // 是否兼容
+	private boolean diff = false; // 是否存在差异
 	
 	private List<ConflictItem> conflictItems = new ArrayList<ConflictItem>(); // 冲突项
 	private List<ColumnInfo> newItems = new ArrayList<ColumnInfo>(); // 新增项
@@ -94,6 +95,12 @@ public class CmptCheckResult implements Serializable {
 	}
 	public void setConflictItems(List<ConflictItem> conflictItems) {
 		this.conflictItems = conflictItems;
+	}
+	public boolean isDiff() {
+		return diff;
+	}
+	public void setDiff(boolean diff) {
+		this.diff = diff;
 	}
 	
 }

@@ -2,6 +2,7 @@ package com.sfexpress.tools.mysql.tbstructck.controller;
 
 import java.util.List;
 
+import org.apache.commons.lang.StringUtils;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -37,8 +38,10 @@ public class CmptCheckController {
 												.user(meta.getGvUser())
 												.password(meta.getGvPwd())
 												.build();
-		String[] tables = meta.getTables().split("\\s+,");
-		
+		String[] tables = StringUtils.split(meta.getTables(), ",");
+		for(int i = 0; i < tables.length; i++) {
+			tables[i] = StringUtils.trim(tables[i]);
+		}
 		AppResult<CmptCheckResult> result = new AppResult<CmptCheckResult>();
 		try {
 			List<CmptCheckResult> rows = colInfoCmptChecker.check(pvConnInfo, gvConnInfo, tables);

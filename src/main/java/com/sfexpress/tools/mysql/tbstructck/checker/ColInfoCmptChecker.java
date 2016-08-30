@@ -1,10 +1,10 @@
 package com.sfexpress.tools.mysql.tbstructck.checker;
 
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -17,10 +17,12 @@ import org.slf4j.LoggerFactory;
 
 import com.google.common.base.Function;
 import com.google.common.collect.Maps;
+import com.sfexpress.tools.mysql.tbstructck.DataType;
 import com.sfexpress.tools.mysql.tbstructck.entity.CmptCheckResult;
 import com.sfexpress.tools.mysql.tbstructck.entity.CmptCheckResult.ConflictItem;
 import com.sfexpress.tools.mysql.tbstructck.entity.ColumnInfo;
 import com.sfexpress.tools.mysql.tbstructck.entity.ConnInfo;
+import com.sfexpress.tools.mysql.tbstructck.utils.ConnUtil;
 import com.sfexpress.tools.mysql.tbstructck.utils.SetUtil;
 
 /**
@@ -31,11 +33,6 @@ import com.sfexpress.tools.mysql.tbstructck.utils.SetUtil;
  */
 public class ColInfoCmptChecker {
 	
-	private static final String FLAG_IP = "${ip}";
-	private static final String FLAG_PORT = "${port}";
-	private static final String FLAG_DB = "${db}";
-	private static String jdbcStrTemplate = "jdbc:mysql://${ip}:${port}/${db}?characterEncoding=utf8";
-	
 	private static Logger logger = LoggerFactory.getLogger(ColInfoCmptChecker.class);
 	
 	private TableExistChecker tbExistChecker = new TableExistChecker();
@@ -43,8 +40,8 @@ public class ColInfoCmptChecker {
 	public List<CmptCheckResult> check(ConnInfo pvConnInfo, ConnInfo gvConnInfo, String[] tables) throws Exception {
 		
 		List<CmptCheckResult> resultList = new ArrayList<CmptCheckResult>();
-		Connection pvConn = getConn(pvConnInfo);
-		Connection gvConn = getConn(gvConnInfo);
+		Connection pvConn = ConnUtil.getConn(pvConnInfo);
+		Connection gvConn = ConnUtil.getConn(gvConnInfo);
 
 		// 检查表是否存在
 		for(String table : tables) {
@@ -91,6 +88,7 @@ public class ColInfoCmptChecker {
 			for(String newItem : newItems) {
 				result.getNewItems().add(gvColumnMap.get(newItem));
 			}
+			result.setDiff(true);
 		}
 		Set<String> deletedItems = SetUtil.getDiffSet(pvColumnSet, gvColumnSet);
 		if(deletedItems.size() > 0) { // has delete items
@@ -98,6 +96,7 @@ public class ColInfoCmptChecker {
 			for(String delItem : deletedItems) {
 				result.getDeletedItems().add(pvColumnMap.get(delItem));
 			}
+			result.setDiff(true);
 		}
 		Set<String> commItems = SetUtil.getInterSet(pvColumnSet, gvColumnSet);
 		for(String commItem : commItems) {
@@ -118,25 +117,51 @@ public class ColInfoCmptChecker {
 	}
 	
 	private boolean checkCompatibility(ColumnInfo pvColInfo, ColumnInfo gvColInfo) throws Exception {
-		String dataType = gvColInfo.getDataType();
+		String dataType = pvColInfo.getDataType(); // 生产版本库列的数据类型
 		DataTypeCmptChecker dtCmptChecker = getDataTypeChecker(dataType);
 		return dtCmptChecker.check(pvColInfo, gvColInfo);
 	}
 	
 	private DataTypeCmptChecker getDataTypeChecker(String dataType) {
-		if("varchar".equalsIgnoreCase(dataType)) {
-			return new VarcharCmptChecker();
-		} else if("char".equalsIgnoreCase(dataType)) {
-			return new CharCmptChecker();
-		} else if("decimal".equalsIgnoreCase(dataType)) {
-			return new DecimalCmptChecker();
-		} else if("double".equalsIgnoreCase(dataType)) {
-			return new DoubleCmptChecker();
-		} else if("float".equalsIgnoreCase(dataType)) {
-			return new FloatCmptChecker();
-		} else {
-			return new DefaultDataTypeCmptChecker(dataType);
+		DataTypeCmptChecker checker = null;
+		switch(DataType.getDataType(dataType)) {
+		case TINYINT:
+			checker = new TinyIntCmptChecker();
+			break;
+		case SMALLINT:
+			checker = new SmallIntCmptChecker();
+			break;
+		case MEDIUMINT:
+			checker = new MediumIntCmptChecker();
+			break;
+		case INT:
+			checker = new IntegerCmptChecker(dataType, "integer");
+			break;
+		case INTEGER:
+			checker = new IntegerCmptChecker(dataType, "int");
+			break;
+		case FLOAT:
+			checker = new FloatCmptChecker();
+			break;
+		case DOUBLE:
+			checker = new DoubleCmptChecker();
+			break;
+		case DECIMAL:
+			checker = new DecimalCmptChecker(dataType, "numeric");
+			break;
+		case NUMERIC:
+			checker = new DecimalCmptChecker(dataType, "decimal");
+		case CHAR:
+			checker = new CharCmptChecker();
+			break;
+		case VARCHAR:
+			checker = new VarcharCmptChecker();
+			break;
+		default:
+			checker = new DefaultDataTypeCmptChecker(dataType);
+			break;
 		}
+		return checker;
 	}
 	
 	private Map<String, ColumnInfo> getColumnInfoMap(List<ColumnInfo> columns) {
@@ -174,22 +199,7 @@ public class ColInfoCmptChecker {
 				+ "  FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?";
 		Object[] params = new Object[]{ db, table };
 		List<ColumnInfo> columnInfoList = qr.query(conn, sql, new BeanListHandler<ColumnInfo>(ColumnInfo.class), params);
-		conn.close();
 		return columnInfoList;
-	}
-	
-	private Connection getConn(ConnInfo connInfo) throws SQLException {
-		Connection conn = DriverManager.getConnection(
-				getJdbcUrl(connInfo.getHost(), connInfo.getPort(), connInfo.getDb()), 
-				connInfo.getUser(), connInfo.getPassword());
-		return conn;
-	}
-	
-	private String getJdbcUrl(String host, String port, String db) {
-		String jdbcUrl = jdbcStrTemplate.replace(FLAG_IP, host)
-											.replace(FLAG_PORT, port)
-											.replace(FLAG_DB, db);
-		return jdbcUrl;
 	}
 	
 	/**
@@ -202,15 +212,29 @@ public class ColInfoCmptChecker {
 	public static abstract class DataTypeCmptChecker {
 		
 		protected String dataType;
+		protected String synonym;
 		
 		public DataTypeCmptChecker(String dataType) {
+			this(dataType, null);
+		}
+		
+		public DataTypeCmptChecker(String dataType, String synonym) {
 			this.dataType = dataType;
+			this.synonym = synonym;
 		}
 		
 		public boolean check(ColumnInfo pvColumn, ColumnInfo gvColumn) {
 			boolean isCmpt = true;
-			if(!getDataType().equalsIgnoreCase(pvColumn.getDataType())) {
-				isCmpt = false;
+			String pvDataType = pvColumn.getDataType();
+			String gvDataType = gvColumn.getDataType();
+			if(!pvDataType.equalsIgnoreCase(gvDataType)) { // data type 不一致
+				if(this.synonym == null) { // 是否有同义词
+					isCmpt = false;
+				} else { // 有同义词,判断灰度版本库列数据类型是否为同义词
+					if(!this.synonym.equalsIgnoreCase(gvDataType)) {
+						isCmpt = false;
+					}
+				}
 			}
 			return isCmpt;
 		}
@@ -232,6 +256,10 @@ public class ColInfoCmptChecker {
 
 		public DefaultDataTypeCmptChecker(String dataType) {
 			super(dataType);
+		}
+		
+		public DefaultDataTypeCmptChecker(String dataType, String synonym) {
+			super(dataType, synonym);
 		}
 		
 	}
@@ -306,15 +334,23 @@ public class ColInfoCmptChecker {
 		public static final String DATA_TYPE = "decimal";
 		
 		public DecimalCmptChecker() {
-			super(DATA_TYPE);
+			super(DATA_TYPE, "numeric");
+		}
+		
+		public DecimalCmptChecker(String dataType, String synonym) {
+			super(dataType, synonym);
 		}
 		
 		@Override
 		public boolean check(ColumnInfo pvColumn, ColumnInfo gvColumn) {
 			
 			if(super.check(pvColumn, gvColumn)) {
-				if(pvColumn.getNumericPrecision() <= gvColumn.getNumericPrecision() && 
-						pvColumn.getNumericScale() <= gvColumn.getNumericScale()) {
+				int pvM = pvColumn.getNumericPrecision();
+				int pvN = pvColumn.getNumericScale();
+				int gvM = gvColumn.getNumericPrecision();
+				int gvN = gvColumn.getNumericScale();
+				if(((pvM - pvN) <= (gvM - gvN)) && 
+						(pvN <= gvN)) {
 					return true;
 				}
 			}
@@ -383,5 +419,155 @@ public class ColInfoCmptChecker {
 		}
 		
 	}
+	
+	/**
+	 * int数据类型兼容性检查
+	 * 
+	 * @author CrazyPig
+	 *
+	 */
+	public static class IntegerCmptChecker extends DataTypeCmptChecker {
+		
+		public static final String DATA_TYPE = "int";
 
+		public IntegerCmptChecker() {
+			super(DATA_TYPE, "integer");
+		}
+		
+		public IntegerCmptChecker(String dataType, String synonym) {
+			super(dataType, synonym);
+		}
+		
+		@Override
+		public boolean check(ColumnInfo pvColumn, ColumnInfo gvColumn) {
+			/*
+			 *  int类型可以兼容int,integer,bigint类型
+			 * 
+			 */
+			String gvDataType = gvColumn.getDataType();
+			final String[] suitableDataTypes = {
+					"int",
+					"integer",
+					"bigint"
+			};
+			Set<String> suitableDataTypeSet = new HashSet<String>(Arrays.asList(suitableDataTypes));
+			if(suitableDataTypeSet.contains(gvDataType.toLowerCase())) {
+				return true;
+			}
+			return false;
+		}
+		
+	}
+	
+	/**
+	 * tinyint数据类型兼容性检查
+	 * 
+	 * @author CrazyPig
+	 *
+	 */
+	public static class TinyIntCmptChecker extends DataTypeCmptChecker {
+		
+		public static final String DATA_TYPE = "tinyint";
+		
+		public TinyIntCmptChecker() {
+			super(DATA_TYPE);
+		}
+		
+		@Override
+		public boolean check(ColumnInfo pvColumn, ColumnInfo gvColumn) {
+			/*
+			 *  tinyint类型可以兼容tinyint,smallint,mediumint,int,integer,bigint类型
+			 * 
+			 */
+			String gvDataType = gvColumn.getDataType();
+			final String[] suitableDataTypes = {
+					"tinyint",
+					"smallint",
+					"mediumint",
+					"int",
+					"integer",
+					"bigint"
+			};
+			Set<String> suitableDataTypeSet = new HashSet<String>(Arrays.asList(suitableDataTypes));
+			if(suitableDataTypeSet.contains(gvDataType.toLowerCase())) {
+				return true;
+			}
+			return false;
+		}
+	}
+	
+	
+	/**
+	 * smallint数据类型兼容性检查
+	 * 
+	 * @author CrazyPig
+	 *
+	 */
+	public static class SmallIntCmptChecker extends DataTypeCmptChecker {
+		
+		public static final String DATA_TYPE = "smallint";
+		
+		public SmallIntCmptChecker() {
+			super(DATA_TYPE);
+		}
+		
+		@Override
+		public boolean check(ColumnInfo pvColumn, ColumnInfo gvColumn) {
+			/*
+			 *  smallint类型可以兼容smallint,mediumint,int,integer,bigint类型
+			 * 
+			 */
+			String gvDataType = gvColumn.getDataType();
+			final String[] suitableDataTypes = {
+					"smallint",
+					"mediumint",
+					"int",
+					"integer",
+					"bigint"
+			};
+			Set<String> suitableDataTypeSet = new HashSet<String>(Arrays.asList(suitableDataTypes));
+			if(suitableDataTypeSet.contains(gvDataType.toLowerCase())) {
+				return true;
+			}
+			return false;
+		}
+		
+	}
+	
+	/**
+	 * mediumint数据类型兼容性检查
+	 * 
+	 * @author CrazyPig
+	 *
+	 */
+	public static class MediumIntCmptChecker extends DataTypeCmptChecker {
+		
+		public static final String DATA_TYPE = "mediumint";
+		
+		public MediumIntCmptChecker() {
+			super(DATA_TYPE);
+		}
+		
+		@Override
+		public boolean check(ColumnInfo pvColumn, ColumnInfo gvColumn) {
+			/*
+			 *  mediumint类型可以兼容mediumint,int,integer,bigint类型
+			 * 
+			 */
+			String gvDataType = gvColumn.getDataType();
+			final String[] suitableDataTypes = {
+					"mediumint",
+					"int",
+					"integer",
+					"bigint"
+			};
+			Set<String> suitableDataTypeSet = new HashSet<String>(Arrays.asList(suitableDataTypes));
+			if(suitableDataTypeSet.contains(gvDataType.toLowerCase())) {
+				return true;
+			}
+			return false;
+		}
+		
+	}
+	
 }
